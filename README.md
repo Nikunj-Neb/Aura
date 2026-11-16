@@ -2,6 +2,25 @@
 
 A minimalist cat-themed AI self-help workspace for adults. Aura is not therapy, diagnosis or emergency care, and has not been clinically validated.
 
+
+## Online Aura
+
+Live private app: https://aura-reflection-space.nikunjneb.chatgpt.site
+
+Sign in with the same ChatGPT account on each device. Create or unlock the online vault in Logs; use the same vault passphrase to restore it elsewhere. The online app stores only client-encrypted vault ciphertext, scoped to the signed-in account, in Cloudflare D1. The Gemini key and per-user CSRF signing secret are configured as hosting secrets, never embedded in the browser or GitHub.
+
+Existing local journals and logs are not uploaded by deployment. Export an encrypted backup from the local app, then choose Import encrypted backup in the online Logs screen if you want to transfer them. If an online vault already exists, unlock it before importing. Backups are decrypted and re-encrypted in the browser. Memory sharing remains an explicit preference.
+
+The online vault has an approximately 1 MB content limit. Concurrent devices use revision checks rather than silently overwriting one another; if a conflict appears, export unsaved work, lock without saving, and unlock the newer copy. The local Python app remains available and uses its separate on-computer vault.
+
+### Hosted build
+
+Run `node scripts/build-online.mjs` (or `npm run build`) to generate the dependency-free Cloudflare Worker at dist/server/index.js. It embeds the frontend assets and derives the core conversational instructions from server.py. Sites deployments use a non-static .openai/hosting.json with the Site-provided project_id, d1 set to DB, and r2 null. That local hosting identity is excluded from GitHub. SQL migrations are tracked under drizzle/.
+
+Runtime secrets: GEMINI_API_KEY and AURA_SESSION_SECRET; AURA_MODEL optionally selects a model. Hosting must supply trusted Sites identity headers and enforce private access. Do not deploy this Worker to an unprotected environment that lets callers spoof those identity headers. Chat is limited to 20 requests per minute per authenticated user.
+
+Run `node online/check.mjs` after building to test hosted identity isolation, per-user CSRF, encrypted-only storage, compare-and-swap conflicts, memory filtering and rate limits. No test touches a real journal or vault.
+
 ## Run locally
 
 Python 3.10+ is required, with no additional packages. Set GEMINI_API_KEY in the server environment, run `python server.py`, and open http://127.0.0.1:4173. The default model is gemini-3.1-flash-lite; AURA_MODEL can select another supported model. Credentials remain on the server and are not included in this download. Keep dist/ beside server.py. This loopback-only development server is not suitable for public hosting.
