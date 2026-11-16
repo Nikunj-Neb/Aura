@@ -1,9 +1,0 @@
-{
-  "name": "aura-companion",
-  "private": true,
-  "type": "module",
-  "scripts": {
-    "build": "node scripts/build-online.mjs",
-    "test": "node check.cjs && python check_server.py && node online/check.mjs"
-  }
-}
