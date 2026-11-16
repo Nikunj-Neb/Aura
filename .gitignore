@@ -1,0 +1,8 @@
+.aura-data/
+__pycache__/
+*.pyc
+.env
+.env.*
+
+# Local hosting identity and execution metadata
+.openai/

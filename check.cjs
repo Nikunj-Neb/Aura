@@ -1,0 +1,97 @@
+const fs=require('node:fs'),vm=require('node:vm'),assert=require('node:assert/strict');
+const elements=new Map(),handlers={},local=new Map();
+function el(s){if(!elements.has(s))elements.set(s,{innerHTML:'',textContent:'',value:'',checked:false,style:{},dataset:{},classList:{toggle(){},add(){},remove(){}},querySelectorAll(){return []},insertAdjacentHTML(){},animate(){},setAttribute(){},addEventListener(){},querySelector(){return el(s+' form')},remove(){},showModal(){},focus(){},click(){}});return elements.get(s);}
+const context={console,document:{querySelector:el,querySelectorAll:()=>[],addEventListener:(k,fn)=>handlers[k]=fn,createElement:()=>el('download')},localStorage:{getItem:k=>local.get(k)||null,setItem:(k,v)=>local.set(k,v),removeItem:k=>local.delete(k)},location:{hash:'#home'},window:{addEventListener(){},scrollTo(){}},crypto:require('node:crypto').webcrypto,setTimeout:()=>1,clearTimeout(){},setInterval:()=>1,clearInterval(){},Blob,URL,confirm:()=>true,prompt:()=>null};
+vm.createContext(context);vm.runInContext(fs.readFileSync('dist/app.js','utf8'),context);
+function run(s){return vm.runInContext(s,context);}function click(dataset){handlers.click({target:{closest:()=>({dataset})}});}function page(hash){context.location.hash=hash;run('route()');return el('#main').innerHTML;}
+assert.match(page('#home'),/How are you feeling/);click({action:'mood'});assert.equal(run('state.moods.length'),0);click({mood:'2'});click({action:'mood'});assert.equal(run('state.moods[0].value'),2);
+for(const route of ['sessions','tools','journal','progress','plan','ground','breathe','support','settings'])assert.ok(page('#'+route).length>500,route);
+page('#exercise/thought');run('flow.answers[0]="<img src=x onerror=alert(1)>"');for(let i=0;i<7;i++)click({action:'next'});assert.match(el('#main').innerHTML,/&lt;img/);assert.doesNotMatch(el('#main').innerHTML,/<img src=x/);el('#takeaway').value='A manageable next step';click({action:'finish'});assert.equal(run('state.sessions.length'),1);assert.equal(run('state.entries.length'),1);assert.equal(run('flow'),null);
+page('#journal');el('#title').value='Test entry';el('#writing').value='A private reflection';el('#prompt').value='';el('#journal-form').onsubmit({preventDefault(){}});assert.equal(run('state.entries.length'),2);assert.equal(local.size,0,'Default must not persist sensitive entries');
+page('#settings');el('#persist').checked=true;el('#persist').onchange();assert.equal(local.size,1);el('#persist').checked=false;el('#persist').onchange();assert.equal(local.size,0);
+page('#plan');el('#action').value='Take a short walk';el('#when').value='2026-11-18';el('#why').value='Movement';el('#plan-form').onsubmit({preventDefault(){}});assert.equal(run('state.plans.length'),1);
+click({action:'clear'});assert.equal(run('state.entries.length+state.moods.length+state.sessions.length+state.plans.length'),0);assert.equal(local.size,0);
+for(const ex of run('exercises.map(x=>x.id)')){page('#exercise/'+ex);const n=run('flow.answers.length');for(let i=0;i<n;i++)click({action:'next'});assert.match(el('#main').innerHTML,/Save reflection/);run('flow=null');}
+console.log('PASS: all routes, six guided flows, mood validation, journal saving, HTML escaping, storage consent, plan creation and deletion.');
+// Exercise the chat state machine without sending any test data to a provider.
+context.document.body=el('body');context.document.body.classList.contains=()=>false;
+context.AbortController=AbortController;
+context.document.addEventListener=()=>{};
+let requests=[];let failNext=false;
+context.fetch=async(url,options)=>{requests.push({url,body:options?.body});if(url==='/api/config')return {ok:true,json:async()=>({configured:true,token:'test-token'})};if(failNext){failNext=false;return {ok:false,status:502,json:async()=>({error:'Test provider failure'})};}return {ok:true,json:async()=>({text:'A thoughtful reply <script>unsafe()</script>'})};};
+el('#cat-shelf').classList.contains=()=>false;
+vm.runInContext(fs.readFileSync('dist/companion.js','utf8'),context);
+(async()=>{
+  page('#chat');run('chatDraft="A fictional first message"');await run('sendChat()');assert.equal(requests.length,0,'Consent must precede provider requests');
+  run('chatConsent=true');await run('sendChat()');assert.equal(run('chatMessages.length'),2);assert.match(el('#main').innerHTML,/&lt;script&gt;/);assert.doesNotMatch(el('#main').innerHTML,/<script>unsafe/);
+  run('chatDraft="A fictional follow-up"');await run('sendChat()');const sent=JSON.parse(requests.at(-1).body);assert.equal(sent.messages.length,3);assert.equal(sent.messages[1].role,'assistant');assert.equal(sent.messages[2].text,'A fictional follow-up');
+  failNext=true;run('chatDraft="Failed test message"');await run('sendChat()');assert.match(run('chatError'),/Test provider failure/);assert.equal(run('chatBusy'),false);
+  run('chatDraft="Replacement for failed message"');await run('sendChat()');const replaced=JSON.parse(requests.at(-1).body);assert.equal(replaced.messages.at(-1).text,'Replacement for failed message');assert.equal(replaced.messages.filter(x=>x.text==='Failed test message').length,0);
+  run('selectedMood=1;renderCats()');assert.match(el('#cat-shelf').innerHTML,/data-state="rest"/);assert.equal((el('#cat-shelf').innerHTML.match(/class="cat-button"/g)||[]).length,2);
+  run('selectedMood=5;renderCats()');assert.match(el('#cat-shelf').innerHTML,/data-state="play"/);run('catsHidden=true;renderCats()');assert.match(el('#cat-shelf').innerHTML,/Bring back the cats/);
+  console.log('PASS: chat consent, multi-turn context, HTML escaping, provider failure recovery, two cats, mood reactions and hiding.');
+  context.window.matchMedia=()=>({matches:false});
+  const bodyClasses=new Set();context.document.body.classList={contains:x=>bodyClasses.has(x),toggle(x,force){const on=force===undefined?!bodyClasses.has(x):force;if(on)bodyClasses.add(x);else bodyClasses.delete(x);return on;},remove:x=>bodyClasses.delete(x)};
+  run('catsHidden=false;chatMessages=[];');
+  vm.runInContext(fs.readFileSync('dist/minimal.js','utf8'),context);
+  assert.match(el('#main').innerHTML,/Hey. What’s on your mind/);assert.doesNotMatch(el('#main').innerHTML,/chat-rail|chat-modes|starters/);
+  assert.equal(el('#space-drawer').inert,true);el('#space-toggle').onclick();assert.equal(el('#space-drawer').inert,false);el('#space-toggle').onclick();assert.equal(el('#space-drawer').inert,true);
+  run('selectedMood=1;renderCats()');assert.match(el('#cat-shelf').innerHTML,/data-behavior="sleep"/);assert.equal((el('#cat-shelf').innerHTML.match(/data-cat=/g)||[]).length,2);
+  assert.match(el('#cat-shelf').innerHTML,/leg-near-front/);assert.match(el('#cat-shelf').innerHTML,/living-head/);
+  console.log('PASS: chat-first layout, hidden extras, accessible drawer and articulated mood-aware cats.');
+  context.TextEncoder=TextEncoder;context.TextDecoder=TextDecoder;context.btoa=btoa;context.atob=atob;context.navigator={language:'en-IN'};context.queueMicrotask=queueMicrotask;
+  context.performance=performance;context.requestAnimationFrame=()=>1;context.cancelAnimationFrame=()=>{};
+  context.document.body.append=()=>{};for(const node of elements.values()){node.querySelectorAll=()=>[];node.insertAdjacentHTML=()=>{};node.animate=()=>{};}
+  vm.runInContext(fs.readFileSync('dist/vault.js','utf8').replace('checkAuraVault();',''),context);
+  // Use an in-memory disk substitute. Never touch the real user's local vault.
+  let record=null;
+  context.testVaultStore=async(path,body)=>{if(!body)return {exists:!!record,...(record?{vault:record}:{})};assert.equal(body.expectedRevision,record?.revision||0);record={...body.vault,revision:(record?.revision||0)+1};return {revision:record.revision};};
+  run('auraLocalAPI=testVaultStore');
+  vm.runInContext(fs.readFileSync('dist/features.js','utf8'),context);
+  run('state.entries=[{id:"entry-one",date:"2026-11-17",title:"Driving test",text:"My driving test is on Friday at Oak Street.",memory:true},{id:"private-entry",date:"2026-11-17",title:"Secret",text:"This must not be shared",memory:false}];');
+  assert.equal(run('JSON.stringify(window.auraChatContext("driving test"))'),'{}','Memory must default to off');
+  run('prefs().journalMemory=true;prefs().country="IN"');const memory=run('window.auraChatContext("driving test")');assert.equal(memory.journal.length,1);assert.match(memory.journal[0].text,/Oak Street/);assert.equal(memory.country.code,'IN');
+  run('prefs().journalMemory=false');assert.equal(run('window.auraChatContext("driving test").journal'),undefined);
+  run('chatMessages=[{role:"user",text:"A private synthetic message"},{role:"assistant",text:"A synthetic reply"}]');
+  await run('openAuraVault("test-passphrase-for-fixtures","test-passphrase-for-fixtures")');assert.ok(record);assert.doesNotMatch(JSON.stringify(record),/private synthetic|Oak Street/);assert.equal(record.iterations,600000);
+  context.testRecord=record;const decrypted=await run('decryptAuraSnapshot(testRecord,vaultKey)'); // bind test input through the sandbox
+  assert.equal(decrypted.state.chatLogs.length,1);
+  context.testRecord=record;await assert.rejects(run('deriveVaultKey("incorrect passphrase",from64(testRecord.salt)).then(key=>decryptAuraSnapshot(testRecord,key))'));
+  const corrupted={...record,data:record.data.slice(0,-5)+'AAAAA'};context.corruptedRecord=corrupted;await assert.rejects(run('decryptAuraSnapshot(corruptedRecord,vaultKey)'));
+  await run('lockAuraVault()');assert.equal(run('vaultKey'),null);assert.equal(run('state.entries.length'),0);assert.equal(run('chatMessages.length'),0);
+  await run('openAuraVault("test-passphrase-for-fixtures")');assert.equal(run('state.entries.length'),2);assert.equal(run('chatMessages.length'),2);assert.equal(run('state.chatLogs.length'),1);
+  run('journalDraft={id:"edit-one",title:"New draft",text:"A journal update",date:stamp(),memory:false};storeJournalDraft()');assert.equal(run('state.entries.find(x=>x.id==="edit-one").memory'),false);
+  vm.runInContext(fs.readFileSync('dist/motion.js','utf8'),context);const bounds=run('catBounds(1,280,68,2)');assert.ok(bounds.min>=140&&bounds.max+68<=280);assert.doesNotMatch(el('#cat-shelf').innerHTML,/cat-note/);
+  console.log('PASS: journal opt-in/exclusions, country context, encrypted logs, wrong-passphrase/tamper rejection, lock/restore, journal edits and bounded silent cats.');
+  vm.runInContext(fs.readFileSync('dist/weekly.js','utf8'),context);
+  assert.equal(run('localWeekKey(new Date(2026,10,17))'),'2026-11-16');assert.equal(run('localWeekKey(new Date(2026,10,22))'),'2026-11-16');assert.equal(run('localWeekKey(new Date(2026,10,23))'),'2026-11-23');
+  run('state.weekly=[];startWeekly();weeklyDraft.answers.thoughts=2;weeklyDraft.note="Synthetic week"');el('#weekly-note').value='Synthetic week';run('saveWeeklyReflection()');assert.equal(run('state.weekly.length'),1);
+  run('startWeekly();weeklyDraft.answers.thoughts=3;saveWeeklyReflection()');assert.equal(run('state.weekly.length'),1,'Editing a week must not farm garden stamps');assert.equal(run('state.weekly[0].answers.thoughts'),3);
+  assert.equal(run('weeklyPatterns(state.weekly).length'),0,'Do not infer a pattern from one week');
+  run('state.weekly=[{id:"w1",week:"2026-11-02",answers:{thoughts:2},note:""},{id:"w2",week:"2026-11-09",answers:{thoughts:3},note:""},{id:"w3",week:"2026-11-16",answers:{thoughts:1},note:""}]');const observed=run('weeklyPatterns(state.weekly)');assert.equal(observed.length,1);assert.equal(observed[0].count,2);assert.equal(observed[0].total,3);
+  const skipped=run('weeklySeries([{week:"2026-11-02",answers:{}},{week:"2026-11-16",answers:{thoughts:2}}],"thoughts")');assert.equal(skipped[0].value,null,'Missing answers must not become zero');
+  context.skippedSeries=skipped;assert.equal((run('weeklyChartHTML(skippedSeries)').match(/<line /g)||[]).length,4,'Only grid lines; no fabricated line across a skipped answer');
+  assert.equal((run('weeklyChartHTML([{week:"2026-11-02",value:1},{week:"2026-11-16",value:2}])').match(/<line /g)||[]).length,4,'Do not connect across a missed week');
+  assert.equal((run('weeklyChartHTML([{week:"2026-11-02",value:1},{week:"2026-11-09",value:2}])').match(/<line /g)||[]).length,5,'Connect adjacent answered weeks');
+  run('prefs().journalMemory=true');assert.equal(run('Object.hasOwn(window.auraChatContext("week"),"weekly")'),false,'Weekly answers are not automatically shared with Gemini');
+  run('weeklyDraft=null');assert.match(run('patternsPage()'),/weekly stamps/);assert.doesNotMatch(run('patternsPage()'),/trauma score|personality type:|diagnosis:/i);
+  run('weeklyDraft={answers:{thoughts:2}}');await run('lockAuraVault()');assert.equal(run('weeklyDraft'),null,'Locking must clear sensitive in-progress quiz answers');
+  await run('openAuraVault("test-passphrase-for-fixtures")');assert.equal(run('state.weekly.length'),3,'Completed weekly history must restore from encrypted storage');
+  page('#weekly');assert.match(el('#main').innerHTML,/A little look back/);page('#patterns');assert.match(el('#main').innerHTML,/reflection-garden/);
+  vm.runInContext(fs.readFileSync('dist/delight.js','utf8'),context);assert.match(run('catArt()'),/cat-yawn-mouth/);
+  console.log('PASS: local weekly dates, one stamp per week, descriptive pattern counts, missing-data handling, quiz privacy and locked-draft cleanup.');
+  page('#chat');vm.runInContext(fs.readFileSync('dist/connection.js','utf8'),context);
+  run('state.entries=[{id:"j-memory",title:"Driving practice",date:stamp(),text:"I avoid driving practice when I worry about making mistakes.",memory:true},{id:"j-excluded",title:"Private driving note",date:stamp(),text:"Private detail",memory:false}];state.weekly=[{id:"week-memory",week:"2026-11-16",answers:{avoidance:3,thoughts:2},note:"Avoiding driving practice"}];state.sessionReviews=[];state.memoryUsage={};state.preferences={journalMemory:true,reflectionMemory:true,country:""};chatMessages=[{role:"user",text:"I avoid driving practice"},{role:"assistant",text:"What makes starting hard?"}];');
+  let combined=run('window.auraChatContext("I avoid driving practice")');assert.equal(combined.journal[0].id,'journal:j-memory');assert.equal(combined.journal.length,1);assert.equal(combined.weekly[0].id,'weekly:2026-11-16');
+  run('window.auraRememberUsed(["journal:j-memory","weekly:2026-11-16"])');combined=run('window.auraChatContext("I avoid driving practice")');assert.equal(combined.journal.length,0);assert.equal(combined.weekly.length,0,'Recently mentioned reflections should get a break');
+  assert.equal(run('window.auraChatContext("What did I write in my journal about driving?").journal.length'),1,'Direct recall should bypass the cooldown');
+  run('prefs().journalMemory=false;prefs().reflectionMemory=false');assert.equal(run('JSON.stringify(window.auraChatContext("driving"))'),'{}','Opt-out must stop memory data and reference IDs');
+  run('prefs().reflectionMemory=true');assert.equal(run('window.auraChatContext("weekly quiz").journal'),undefined);assert.equal(run('window.auraChatContext("weekly quiz").weekly.length'),1);
+  assert.equal(run('sessionWrap'),null,'Sending messages alone must not start a check-in');run('openSessionWrap("finish")');assert.ok(run('sessionWrap'));assert.equal(run('state.sessionReviews.length'),0,'Do not fabricate answers before submission');
+  run('sessionWrap.helpfulness="mixed";sessionWrap.feeling="same"');el('#session-takeaway').value='A ten-minute practice is enough to start';el('#session-memory').checked=true;run('completeSessionWrap()');assert.equal(run('state.sessionReviews.length'),1);assert.equal(run('state.sessionReviews[0].helpfulness'),'mixed');assert.equal(run('Object.hasOwn(state.sessionReviews[0],"resolved")'),false);
+  const reviewedLog=run('activeLogId');run('openSessionWrap("new")');assert.equal(run('sessionWrap'),null,'Do not re-ask an already completed check-in before a new chat');assert.notEqual(run('activeLogId'),reviewedLog);assert.equal(run('chatMessages.length'),0);
+  run('chatMessages=[{role:"user",text:"Another fictional chat"},{role:"assistant",text:"A reply"}];openSessionWrap("new");completeSessionWrap(true)');assert.equal(run('state.sessionReviews.length'),1,'Skipping must not create a fake neutral review');assert.equal(run('chatMessages.length'),0);
+  await run('(async()=>{await flushAuraVault();await lockAuraVault();await openAuraVault("test-passphrase-for-fixtures");})()');assert.equal(run('state.sessionReviews.length'),1,'Reviews must survive encrypted lock/restore');
+  vm.runInContext(fs.readFileSync('dist/polish.js','utf8'),context);assert.match(run('catArt()'),/cute-ear/);assert.doesNotMatch(run('catArt()'),/linearGradient|radialGradient/);
+  console.log('PASS: combined memory scopes, exclusions, reference cooldown, direct recall, optional finish-only check-ins, skip behavior and encrypted review restore.');
+})().catch(error=>{console.error(error);process.exitCode=1;});
